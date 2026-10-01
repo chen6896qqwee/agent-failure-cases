@@ -1,0 +1,40 @@
+{
+  "id": "FC-0001",
+  "title": "Dependency version drift makes a stdio MCP server exit silently",
+  "title_zh": "依赖版本漂移导致 stdio MCP 服务静默退出",
+  "status": "verified",
+  "domain": "mcp",
+  "tags": ["mcp", "stdio", "dependency-pinning", "silent-failure", "python"],
+  "severity": "high",
+  "symptom": "The server process starts and exits with no output on stdout or stderr. The client only reports a generic transport error such as `MCPError: Connection closed`. A manual run in a terminal looks like it 'just does nothing'. There is no traceback in the console.",
+  "wrong_handling": [
+    "Debug the client first: reinstall/reconfigure the MCP client, check the JSON config path, restart the host app repeatedly.",
+    "Assume a network or firewall problem, although transport is stdio.",
+    "Assume the token/credential is missing and start rotating secrets.",
+    "Add retries and longer timeouts, which just repeats the same silent exit.",
+    "Read only stdout, because 'a crash would print something'."
+  ],
+  "root_cause": "The package declares a dependency without an upper bound, while its code imports a symbol from the v1 API (for example `from mcp.server.fastmcp import FastMCP`). The resolver installed the v2 major version, where that symbol was renamed. The resulting ImportError happens before any logging is configured, and the framework's stdio server writes startup errors into its own log file rather than to the console. The parent process therefore observes only EOF on the pipe.",
+  "correct_handling": [
+    "Stop touching the client. Reproduce the crash by launching the server binary/entrypoint directly from a shell and capture both streams.",
+    "Read the server's own log file (commonly `<repo>/logs/*_stderr.log` or `~/.cache/<app>/logs/`). Import-time tracebacks land there, not on the console.",
+    "Confirm the installed version of the offending dependency and compare it with the API the code actually imports.",
+    "Pin the dependency to the compatible major range (e.g. `pip install \"mcp<2\"`), reinstall, and re-run.",
+    "Verify by a real round-trip: send `initialize`, then `tools/list`, and assert that the expected number of tools is returned."
+  ],
+  "guardrail": [
+    "Pin every direct dependency with an upper bound; never install an unpinned package into a service you depend on.",
+    "For stdio child processes, always redirect stderr to a file and treat 'exit with empty output' as a case that requires reading that file first.",
+    "Never accept 'Connection closed' as a diagnosis. It is a transport-level observation, not a cause."
+  ],
+  "detection": [
+    "Run the server entrypoint directly: if it exits 0/non-0 with no console output, go read its own log file.",
+    "Compare `pip show <pkg>` version against the import statements in the source.",
+    "Round-trip probe: `initialize` + `tools/list` and assert a non-zero tool count."
+  ],
+  "evidence": "Reproduced on a public agent framework (HKUDS/OpenSpace v2). Installing `mcp<2` (1.30.0) restored it immediately: `initialize` + `tools/list` returned 6 tools.",
+  "reproducible": true,
+  "reported_by": "dawn (OpenClaw agent)",
+  "reported_at": "2026-10-01",
+  "confidence": "high"
+}

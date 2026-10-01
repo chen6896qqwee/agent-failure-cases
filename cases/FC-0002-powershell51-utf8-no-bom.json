@@ -1,0 +1,40 @@
+{
+  "id": "FC-0002",
+  "title": "Windows PowerShell 5.1 reads UTF-8 without BOM as ANSI and turns a valid script into a syntax error",
+  "title_zh": "PowerShell 5.1 把无 BOM 的 UTF-8 当 ANSI 读，脚本整体语法错误",
+  "status": "verified",
+  "domain": "windows-shell",
+  "tags": ["powershell", "encoding", "utf8", "bom", "windows", "mojibake"],
+  "severity": "medium",
+  "symptom": "A script that looks correct in the editor fails at parse time with errors pointing at a line that plainly looks fine, e.g. `Unexpected token` / `字符串缺少终止符` / `Missing closing '}'`. Non-ASCII literals inside the script render as mojibake when the error is echoed back. The same file executes correctly on another machine or under PowerShell 7.",
+  "wrong_handling": [
+    "Re-type the offending line, assuming a typo or an invisible character.",
+    "Switch editors or re-save the file as 'UTF-8' (many Windows editors mean UTF-8 *without* BOM, reproducing the bug exactly).",
+    "Bisect the script by deleting half of it, hunting for a logic error that does not exist.",
+    "Rewrite the script into another language to 'work around the encoding'.",
+    "Blame the terminal font or the console code page."
+  ],
+  "root_cause": "Windows PowerShell 5.1 (the one shipped with the OS, `powershell.exe`) decodes a script file as the system ANSI code page (e.g. GBK/CP936 on zh-CN) unless the file starts with a UTF-8 BOM. A BOM-less UTF-8 file containing multi-byte characters is therefore mis-decoded: byte pairs of a CJK string are read as garbage characters, which can produce stray quote characters or braces and break tokenization of the *whole file*. The parser then reports errors far from the true origin. PowerShell 7+ defaults to UTF-8 and does not show the problem, which is why the same file 'works for someone else'.",
+  "correct_handling": [
+    "Identify the interpreter: `$PSVersionTable.PSVersion.Major` — 5 means this failure mode applies.",
+    "Check the first three bytes of the file; UTF-8 BOM is EF BB BF. If absent and the file contains non-ASCII, that is the cause.",
+    "Fix by choosing one of two shapes: (a) keep the script body pure ASCII, and move all non-ASCII text into a separate data file (JSON/UTF-8) loaded at runtime; or (b) save the script as UTF-8 **with BOM**.",
+    "Prefer (a) for scripts, because it is immune to the next editor that 'helpfully' strips the BOM.",
+    "Re-run and confirm the parse error is gone before touching anything else."
+  ],
+  "guardrail": [
+    "Script bodies stay ASCII-only, or carry an explicit UTF-8 BOM. No exceptions.",
+    "Non-ASCII content lives in data files, never as string literals inside .ps1 source.",
+    "Any 'syntax error on a line that looks correct' in PowerShell 5.1 should route straight to an encoding check, before any logic debugging."
+  ],
+  "detection": [
+    "`[System.IO.File]::ReadAllBytes($p)[0..2]` — expect `239 187 191` for a BOM.",
+    "`$PSVersionTable.PSVersion.Major` to know whether the ANSI default applies.",
+    "Write a two-line probe script containing one CJK literal and see whether it parses."
+  ],
+  "evidence": "Reproduced repeatedly on a zh-CN Windows host with an agent workspace that generates .ps1 files programmatically",
+  "reproducible": true,
+  "reported_by": "dawn (OpenClaw agent)",
+  "reported_at": "2026-10-01",
+  "confidence": "high"
+}

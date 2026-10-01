@@ -1,0 +1,125 @@
+{
+  "schema_version": 1,
+  "generated_by": "scripts/validate.mjs",
+  "count": 3,
+  "note": "Machine entrypoint for agents. Match on symptom/tags, apply correct_handling, skip wrong_handling.",
+  "cases": [
+    {
+      "id": "FC-0001",
+      "title": "Dependency version drift makes a stdio MCP server exit silently",
+      "title_zh": "依赖版本漂移导致 stdio MCP 服务静默退出",
+      "domain": "mcp",
+      "tags": [
+        "mcp",
+        "stdio",
+        "dependency-pinning",
+        "silent-failure",
+        "python"
+      ],
+      "severity": "high",
+      "symptom": "The server process starts and exits with no output on stdout or stderr. The client only reports a generic transport error such as `MCPError: Connection closed`. A manual run in a terminal looks like it 'just does nothing'. There is no traceback in the console.",
+      "wrong_handling": [
+        "Debug the client first: reinstall/reconfigure the MCP client, check the JSON config path, restart the host app repeatedly.",
+        "Assume a network or firewall problem, although transport is stdio.",
+        "Assume the token/credential is missing and start rotating secrets.",
+        "Add retries and longer timeouts, which just repeats the same silent exit.",
+        "Read only stdout, because 'a crash would print something'."
+      ],
+      "root_cause": "The package declares a dependency without an upper bound, while its code imports a symbol from the v1 API (for example `from mcp.server.fastmcp import FastMCP`). The resolver installed the v2 major version, where that symbol was renamed. The resulting ImportError happens before any logging is configured, and the framework's stdio server writes startup errors into its own log file rather than to the console. The parent process therefore observes only EOF on the pipe.",
+      "correct_handling": [
+        "Stop touching the client. Reproduce the crash by launching the server binary/entrypoint directly from a shell and capture both streams.",
+        "Read the server's own log file (commonly `<repo>/logs/*_stderr.log` or `~/.cache/<app>/logs/`). Import-time tracebacks land there, not on the console.",
+        "Confirm the installed version of the offending dependency and compare it with the API the code actually imports.",
+        "Pin the dependency to the compatible major range (e.g. `pip install \"mcp<2\"`), reinstall, and re-run.",
+        "Verify by a real round-trip: send `initialize`, then `tools/list`, and assert that the expected number of tools is returned."
+      ],
+      "guardrail": [
+        "Pin every direct dependency with an upper bound; never install an unpinned package into a service you depend on.",
+        "For stdio child processes, always redirect stderr to a file and treat 'exit with empty output' as a case that requires reading that file first.",
+        "Never accept 'Connection closed' as a diagnosis. It is a transport-level observation, not a cause."
+      ],
+      "confidence": "high",
+      "reported_at": "2026-10-01",
+      "file": "cases/FC-0001-mcp-version-drift-silent-crash.json"
+    },
+    {
+      "id": "FC-0002",
+      "title": "Windows PowerShell 5.1 reads UTF-8 without BOM as ANSI and turns a valid script into a syntax error",
+      "title_zh": "PowerShell 5.1 把无 BOM 的 UTF-8 当 ANSI 读，脚本整体语法错误",
+      "domain": "windows-shell",
+      "tags": [
+        "powershell",
+        "encoding",
+        "utf8",
+        "bom",
+        "windows",
+        "mojibake"
+      ],
+      "severity": "medium",
+      "symptom": "A script that looks correct in the editor fails at parse time with errors pointing at a line that plainly looks fine, e.g. `Unexpected token` / `字符串缺少终止符` / `Missing closing '}'`. Non-ASCII literals inside the script render as mojibake when the error is echoed back. The same file executes correctly on another machine or under PowerShell 7.",
+      "wrong_handling": [
+        "Re-type the offending line, assuming a typo or an invisible character.",
+        "Switch editors or re-save the file as 'UTF-8' (many Windows editors mean UTF-8 *without* BOM, reproducing the bug exactly).",
+        "Bisect the script by deleting half of it, hunting for a logic error that does not exist.",
+        "Rewrite the script into another language to 'work around the encoding'.",
+        "Blame the terminal font or the console code page."
+      ],
+      "root_cause": "Windows PowerShell 5.1 (the one shipped with the OS, `powershell.exe`) decodes a script file as the system ANSI code page (e.g. GBK/CP936 on zh-CN) unless the file starts with a UTF-8 BOM. A BOM-less UTF-8 file containing multi-byte characters is therefore mis-decoded: byte pairs of a CJK string are read as garbage characters, which can produce stray quote characters or braces and break tokenization of the *whole file*. The parser then reports errors far from the true origin. PowerShell 7+ defaults to UTF-8 and does not show the problem, which is why the same file 'works for someone else'.",
+      "correct_handling": [
+        "Identify the interpreter: `$PSVersionTable.PSVersion.Major` — 5 means this failure mode applies.",
+        "Check the first three bytes of the file; UTF-8 BOM is EF BB BF. If absent and the file contains non-ASCII, that is the cause.",
+        "Fix by choosing one of two shapes: (a) keep the script body pure ASCII, and move all non-ASCII text into a separate data file (JSON/UTF-8) loaded at runtime; or (b) save the script as UTF-8 **with BOM**.",
+        "Prefer (a) for scripts, because it is immune to the next editor that 'helpfully' strips the BOM.",
+        "Re-run and confirm the parse error is gone before touching anything else."
+      ],
+      "guardrail": [
+        "Script bodies stay ASCII-only, or carry an explicit UTF-8 BOM. No exceptions.",
+        "Non-ASCII content lives in data files, never as string literals inside .ps1 source.",
+        "Any 'syntax error on a line that looks correct' in PowerShell 5.1 should route straight to an encoding check, before any logic debugging."
+      ],
+      "confidence": "high",
+      "reported_at": "2026-10-01",
+      "file": "cases/FC-0002-powershell51-utf8-no-bom.json"
+    },
+    {
+      "id": "FC-0003",
+      "title": "Long maintenance transaction starves a writer on the same SQLite database",
+      "title_zh": "长维护事务堵住写窗口，同库写入方耗尽 busy timeout 而失败",
+      "domain": "storage",
+      "tags": [
+        "sqlite",
+        "locking",
+        "concurrency",
+        "maintenance",
+        "retry",
+        "false-corruption"
+      ],
+      "severity": "high",
+      "symptom": "An agent run fails with `SQLite: database is locked` / `the state database was busy`. A retry usually succeeds. Gateway logs at the same moment show one or more `slow SQLite transaction hold` warnings, and a related cleanup step fails with `database is locked` too. Health endpoint still reports the service as live.",
+      "wrong_handling": [
+        "Conclude the database is corrupted and start recovery.",
+        "Run a full compaction/VACUUM while runs are active, which creates the very long write it is trying to avoid.",
+        "Restart the service repeatedly instead of retrying the operation.",
+        "Assume a second stray process is the culprit, and clear the error as soon as only one process is seen holding the file.",
+        "Rotate credentials or re-authenticate, because 'the run failed' is misread as 'the provider rejected it'."
+      ],
+      "root_cause": "SQLite allows one writer at a time. A maintenance job (session reclamation / commit, or a full index rebuild triggered by workspace file changes) opened a write transaction that was held for far longer than the writer's `busyTimeout`. Measured example: a 17.78s hold on a 590 MB database, alongside 3.6-4.1s index-rebuild transactions. The application-level writer retried at the native layer (65 attempts over ~5.03s), exhausted the 5s busy timeout, and surfaced `sqliteErrcode=5` as a failed run. Nothing was damaged: no corruption, no full disk, no read-only mount. It was pure write-window starvation.",
+      "correct_handling": [
+        "Retry the operation once. Documented behaviour is that transient `database is locked` resolves on retry; do not escalate on the first occurrence.",
+        "Read the logs and find the holder: search for `slow SQLite transaction hold`, `lock wait failed`, `lock-contention`, and the reclamation/index-rebuild operations in the same time window.",
+        "Verify integrity read-only (integrity check, and a doctor/inspect pass) rather than assuming damage.",
+        "Do NOT compact. Check the freelist first: if it is 0 there are no pages to reclaim, so VACUUM buys nothing and only adds a long write.",
+        "Record the actual rule: serialize heavy maintenance. Full scans, index rebuilds, session deletion, doctor passes and compaction run one at a time, and never in the same window as an active agent run writing its own transcript."
+      ],
+      "guardrail": [
+        "One maintenance task at a time. No parallelism between index rebuild / reclamation / compaction / doctor.",
+        "Never compact a database while runs are active; compaction is an offline operation.",
+        "Do not schedule bulk file operations (which trigger re-indexing) right before or during a session that is writing state.",
+        "Treat a single sub-busyTimeout `transaction hold` warning as noise, but any hold at or above the configured busyTimeout as a run-failure cause."
+      ],
+      "confidence": "high",
+      "reported_at": "2026-10-01",
+      "file": "cases/FC-0003-sqlite-lock-contention-long-maintenance.json"
+    }
+  ]
+}

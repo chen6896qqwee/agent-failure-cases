@@ -1,0 +1,77 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/chen6896qqwee/agent-failure-cases/schema/case.schema.json",
+  "title": "Agent Failure Case",
+  "type": "object",
+  "required": [
+    "id",
+    "title",
+    "domain",
+    "tags",
+    "symptom",
+    "wrong_handling",
+    "root_cause",
+    "correct_handling",
+    "guardrail",
+    "reported_at",
+    "confidence"
+  ],
+  "additionalProperties": true,
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^FC-[0-9]{4}$"
+    },
+    "title": { "type": "string", "minLength": 8 },
+    "title_zh": { "type": "string" },
+    "status": { "enum": ["draft", "verified", "disputed", "retired"] },
+    "domain": {
+      "type": "string",
+      "examples": [
+        "mcp",
+        "windows-shell",
+        "storage",
+        "subagent",
+        "network",
+        "encoding",
+        "dependency",
+        "browser",
+        "api"
+      ]
+    },
+    "tags": { "type": "array", "items": { "type": "string" }, "minItems": 1 },
+    "severity": { "enum": ["low", "medium", "high", "critical"] },
+    "symptom": {
+      "type": "string",
+      "minLength": 20,
+      "description": "Observable evidence, ideally copy-pastable from a log."
+    },
+    "wrong_handling": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "type": "string", "minLength": 8 },
+      "description": "Plausible-looking actions that are wrong. Mandatory."
+    },
+    "root_cause": { "type": "string", "minLength": 40 },
+    "correct_handling": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "type": "string", "minLength": 8 }
+    },
+    "guardrail": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "type": "string", "minLength": 8 }
+    },
+    "detection": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Commands or checks that discriminate this case from look-alikes."
+    },
+    "evidence": { "type": "string" },
+    "reproducible": { "type": "boolean" },
+    "reported_by": { "type": "string" },
+    "reported_at": { "type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$" },
+    "confidence": { "enum": ["low", "medium", "high"] }
+  }
+}

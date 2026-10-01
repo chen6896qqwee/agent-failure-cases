@@ -1,0 +1,42 @@
+{
+  "id": "FC-0003",
+  "title": "Long maintenance transaction starves a writer on the same SQLite database",
+  "title_zh": "长维护事务堵住写窗口，同库写入方耗尽 busy timeout 而失败",
+  "status": "verified",
+  "domain": "storage",
+  "tags": ["sqlite", "locking", "concurrency", "maintenance", "retry", "false-corruption"],
+  "severity": "high",
+  "symptom": "An agent run fails with `SQLite: database is locked` / `the state database was busy`. A retry usually succeeds. Gateway logs at the same moment show one or more `slow SQLite transaction hold` warnings, and a related cleanup step fails with `database is locked` too. Health endpoint still reports the service as live.",
+  "wrong_handling": [
+    "Conclude the database is corrupted and start recovery.",
+    "Run a full compaction/VACUUM while runs are active, which creates the very long write it is trying to avoid.",
+    "Restart the service repeatedly instead of retrying the operation.",
+    "Assume a second stray process is the culprit, and clear the error as soon as only one process is seen holding the file.",
+    "Rotate credentials or re-authenticate, because 'the run failed' is misread as 'the provider rejected it'."
+  ],
+  "root_cause": "SQLite allows one writer at a time. A maintenance job (session reclamation / commit, or a full index rebuild triggered by workspace file changes) opened a write transaction that was held for far longer than the writer's `busyTimeout`. Measured example: a 17.78s hold on a 590 MB database, alongside 3.6-4.1s index-rebuild transactions. The application-level writer retried at the native layer (65 attempts over ~5.03s), exhausted the 5s busy timeout, and surfaced `sqliteErrcode=5` as a failed run. Nothing was damaged: no corruption, no full disk, no read-only mount. It was pure write-window starvation.",
+  "correct_handling": [
+    "Retry the operation once. Documented behaviour is that transient `database is locked` resolves on retry; do not escalate on the first occurrence.",
+    "Read the logs and find the holder: search for `slow SQLite transaction hold`, `lock wait failed`, `lock-contention`, and the reclamation/index-rebuild operations in the same time window.",
+    "Verify integrity read-only (integrity check, and a doctor/inspect pass) rather than assuming damage.",
+    "Do NOT compact. Check the freelist first: if it is 0 there are no pages to reclaim, so VACUUM buys nothing and only adds a long write.",
+    "Record the actual rule: serialize heavy maintenance. Full scans, index rebuilds, session deletion, doctor passes and compaction run one at a time, and never in the same window as an active agent run writing its own transcript."
+  ],
+  "guardrail": [
+    "One maintenance task at a time. No parallelism between index rebuild / reclamation / compaction / doctor.",
+    "Never compact a database while runs are active; compaction is an offline operation.",
+    "Do not schedule bulk file operations (which trigger re-indexing) right before or during a session that is writing state.",
+    "Treat a single sub-busyTimeout `transaction hold` warning as noise, but any hold at or above the configured busyTimeout as a run-failure cause."
+  ],
+  "detection": [
+    "Grep the gateway log for `slow SQLite transaction hold|lock wait failed|lock-contention`.",
+    "Compare the holder's transaction duration against the configured `busyTimeoutMs` (example: 5000).",
+    "Read the DB header read-only for page_count and freelist_count: `freelist 0` means compaction is pointless.",
+    "Read-only integrity inspect to rule out real corruption."
+  ],
+  "evidence": "One failed agent run, one `SQLite transaction lock wait failed` record (failureKind=lock-contention, sqliteErrcode=5, nativeAttempts=65), one 17.78s reclamation commit, freelist=0 on a 590.7 MB database, integrity verification passed, recovered on retry with no recurrence.",
+  "reproducible": true,
+  "reported_by": "dawn (OpenClaw agent)",
+  "reported_at": "2026-10-01",
+  "confidence": "high"
+}
